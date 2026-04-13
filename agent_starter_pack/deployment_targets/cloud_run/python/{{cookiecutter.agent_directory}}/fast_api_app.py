@@ -562,6 +562,108 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     return {"status": "success"}
 
 
+# --- WhatsApp Channel Integration ---
+# Enable by setting TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_WHATSAPP_FROM
+{% if cookiecutter.agent_name == "adk_live" %}
+# WhatsApp is not supported for the adk_live agent (real-time audio/video only).
+{% else %}
+import logging as _logging
+
+from {{cookiecutter.agent_directory}}.channels.whatsapp import whatsapp_router
+from {{cookiecutter.agent_directory}}.channels.whatsapp.webhook import (
+    initialize as _whatsapp_init,
+    set_agent_handler as _set_whatsapp_handler,
+)
+
+_wa_logger = _logging.getLogger("whatsapp_setup")
+
+if os.environ.get("TWILIO_ACCOUNT_SID"):
+    _whatsapp_init()
+{%- if cookiecutter.is_adk %}
+{%- if cookiecutter.is_a2a %}
+
+    async def _whatsapp_agent_handler(message: str, user_id: str, session_id: str) -> str:
+        """Handle a WhatsApp message using the ADK A2A runner."""
+        from google.genai.types import Content, Part
+
+        content = Content(role="user", parts=[Part(text=message)])
+        response_parts = []
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=session_id,
+            new_message=content,
+        ):
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        response_parts.append(part.text)
+        return "\n".join(response_parts) if response_parts else "No response from agent."
+{%- else %}
+
+    # Create a dedicated runner for WhatsApp messages (initialized once)
+    from google.adk.runners import Runner as _WaRunner
+    from google.adk.sessions import InMemorySessionService as _WaSessionService
+
+    from {{cookiecutter.agent_directory}}.agent import app as _wa_adk_app
+
+    _wa_session_service = _WaSessionService()
+    _wa_runner = _WaRunner(
+        app=_wa_adk_app,
+        session_service=_wa_session_service,
+    )
+
+    async def _whatsapp_agent_handler(message: str, user_id: str, session_id: str) -> str:
+        """Handle a WhatsApp message using the ADK agent."""
+        from google.genai.types import Content, Part
+
+        content = Content(role="user", parts=[Part(text=message)])
+        session = await _wa_session_service.create_session(
+            app_name=_wa_adk_app.name,
+            user_id=user_id,
+        )
+        response_parts = []
+        async for event in _wa_runner.run_async(
+            user_id=user_id,
+            session_id=session.id,
+            new_message=content,
+        ):
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        response_parts.append(part.text)
+        return "\n".join(response_parts) if response_parts else "No response from agent."
+{%- endif %}
+{%- else %}
+
+    async def _whatsapp_agent_handler(message: str, user_id: str, session_id: str) -> str:
+        """Handle a WhatsApp message using the LangGraph agent."""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        result = await root_agent.ainvoke({"messages": [HumanMessage(content=message)]})
+        if "messages" in result:
+            for msg in reversed(result["messages"]):
+                if isinstance(msg, AIMessage) and msg.content:
+                    if isinstance(msg.content, str):
+                        return msg.content
+                    # Handle list content (multimodal)
+                    text_parts = [
+                        p["text"] for p in msg.content
+                        if isinstance(p, dict) and "text" in p
+                    ]
+                    if text_parts:
+                        return "\n".join(text_parts)
+        return "No response from agent."
+{%- endif %}
+
+    _set_whatsapp_handler(_whatsapp_agent_handler)
+    app.include_router(whatsapp_router)
+    _wa_logger.info("WhatsApp channel enabled at /whatsapp/webhook")
+else:
+    _wa_logger.info(
+        "WhatsApp channel disabled. Set TWILIO_ACCOUNT_SID to enable."
+    )
+{% endif %}
+
 # Main execution
 if __name__ == "__main__":
     import uvicorn

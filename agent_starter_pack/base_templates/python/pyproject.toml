@@ -36,6 +36,9 @@ dev = [
 ]
 
 [project.optional-dependencies]
+whatsapp = [
+    "twilio>=9.0.0,<10.0.0",
+]
 jupyter = [
     "jupyter>=1.0.0,<2.0.0",
 ]
