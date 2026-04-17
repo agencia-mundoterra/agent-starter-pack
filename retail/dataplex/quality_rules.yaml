@@ -1,0 +1,192 @@
+# =============================================================
+# Dataplex Data Quality - Regras de Validação
+# Projeto: retail omnichannel
+# Frequência: Hourly para fact_vendas / Daily para dims
+# Alertas: Cloud Monitoring + Pub/Sub para times de dados
+# =============================================================
+
+dataQualityScan:
+  name: retail-dq-scan
+  location: us-east1
+
+rules:
+
+  # -----------------------------------------------------------
+  # TABELA: retail_bronze.vendas_header
+  # -----------------------------------------------------------
+  - table: retail_bronze.vendas_header
+    rules:
+
+      - name: "DQ-001: ID único em vendas_header"
+        type: UNIQUENESS
+        column: id
+        threshold: 1.0
+        description: "IDs de vendas não podem estar duplicados no DW"
+
+      - name: "DQ-002: valor_liquido não pode ser negativo"
+        type: RANGE_CHECK
+        column: valor_liquido
+        minValue: 0
+        threshold: 0.99
+        description: "Valor líquido deve ser >= 0. Devolucoes devem ter status próprio."
+
+      - name: "DQ-003: Freshness - lag máximo 5 minutos"
+        type: FRESHNESS
+        column: updated_at
+        maxAge: "5m"
+        threshold: 1.0
+        description: "Dado no BigQuery não pode ter lag > 5min vs Supabase"
+
+      - name: "DQ-004: loja_id não nulo"
+        type: NULLABILITY
+        column: loja_id
+        threshold: 1.0
+        description: "Todo cabeçalho de venda deve ter loja_id"
+
+      - name: "DQ-005: cliente_id não nulo em vendas com CPF"
+        type: NULLABILITY
+        column: cliente_id
+        threshold: 0.85
+        description: ">=85% das vendas devem ter cliente identificado"
+
+      - name: "DQ-006: canal_venda válido"
+        type: SET_CHECK
+        column: canal_venda
+        allowedValues:
+          - "PDV"
+          - "ECOMMERCE"
+          - "APP"
+          - "WHATSAPP"
+          - "MARKETPLACE"
+          - "TELEVENDAS"
+        threshold: 0.95
+        description: "Canal de venda deve ser um valor conhecido"
+
+  # -----------------------------------------------------------
+  # TABELA: retail_bronze.vendas_itens
+  # -----------------------------------------------------------
+  - table: retail_bronze.vendas_itens
+    rules:
+
+      - name: "DQ-007: Quantidade de itens não pode ser zero ou negativa"
+        type: RANGE_CHECK
+        column: qt
+        minValue: 1
+        threshold: 0.99
+        description: "Itens vendidos devem ter qt >= 1"
+
+      - name: "DQ-008: Preço unitário positivo"
+        type: RANGE_CHECK
+        column: prc_unitario
+        minValue: 0.01
+        threshold: 0.99
+        description: "Preço unitário deve ser > 0"
+
+      - name: "DQ-009: Freshness itens - lag máximo 5 minutos"
+        type: FRESHNESS
+        column: data_at
+        maxAge: "5m"
+        threshold: 1.0
+        description: "Itens de venda não podem ter lag > 5min"
+
+      - name: "DQ-010: codigo (SKU) não nulo"
+        type: NULLABILITY
+        column: codigo
+        threshold: 1.0
+        description: "Todo item deve ter código de produto"
+
+      - name: "DQ-011: Checksum - total_liquido >= 0"
+        type: RANGE_CHECK
+        column: total_liquido
+        minValue: 0
+        threshold: 0.99
+        description: "Total líquido do item não pode ser negativo"
+
+  # -----------------------------------------------------------
+  # TABELA: retail_bronze.clientes
+  # -----------------------------------------------------------
+  - table: retail_bronze.clientes
+    rules:
+
+      - name: "DQ-012: ID único em clientes"
+        type: UNIQUENESS
+        column: id
+        threshold: 1.0
+        description: "IDs de clientes não podem estar duplicados"
+
+      - name: "DQ-013: CPF/CNPJ não nulo"
+        type: NULLABILITY
+        column: cpf_cnpj
+        threshold: 0.90
+        description: ">=90% dos clientes devem ter CPF/CNPJ"
+
+      - name: "DQ-014: Freshness clientes"
+        type: FRESHNESS
+        column: updated_at
+        maxAge: "10m"
+        threshold: 1.0
+        description: "Clientes devem ter lag < 10 minutos"
+
+      - name: "DQ-015: UF válida (2 chars)"
+        type: REGEX_CHECK
+        column: uf
+        regex: "^[A-Z]{2}$"
+        threshold: 0.98
+        description: "UF deve ter exatamente 2 letras maiúsculas"
+
+  # -----------------------------------------------------------
+  # TABELA: retail_bronze.produtos
+  # -----------------------------------------------------------
+  - table: retail_bronze.produtos
+    rules:
+
+      - name: "DQ-016: Margem percentual range válido"
+        type: RANGE_CHECK
+        column: margem_percentual
+        minValue: -50
+        maxValue: 300
+        threshold: 0.98
+        description: "Margem percentual deve estar entre -50% e 300%"
+
+      - name: "DQ-017: Preço de venda positivo"
+        type: RANGE_CHECK
+        column: preco_venda
+        minValue: 0.01
+        threshold: 0.99
+        description: "Preço de venda deve ser > 0"
+
+      - name: "DQ-018: Preço custo <= preço venda"
+        type: CUSTOM_SQL
+        sqlExpression: >
+          SELECT COUNT(*) / CAST(total AS FLOAT64) >= 0.95
+          FROM (
+            SELECT COUNT(*) AS cnt,
+                   (SELECT COUNT(*) FROM `retail_bronze.produtos`) AS total
+            FROM `retail_bronze.produtos`
+            WHERE preco_custo <= preco_venda
+          )
+        description: ">=95% dos produtos: preço custo <= preço venda"
+
+  # -----------------------------------------------------------
+  # CHECKSUM: Consistência Bronze -> Silver
+  # Executar diariamente após carga
+  # -----------------------------------------------------------
+  - type: CROSS_TABLE_CHECKSUM
+    name: "DQ-019: Checksum vendas_header Bronze vs Silver"
+    description: "SUM(valor_liquido) deve ser igual entre bronze e silver"
+    query: >
+      SELECT
+        ABS(
+          (SELECT SUM(valor_liquido) FROM `retail_bronze.vendas_header`
+           WHERE DATE(updated_at) = CURRENT_DATE()) -
+          (SELECT SUM(valor_liquido_venda) FROM `retail_silver.fact_vendas`
+           WHERE DATE(updated_at) = CURRENT_DATE())
+        ) < 1.0 AS checksum_ok
+
+  - type: CROSS_TABLE_CHECKSUM
+    name: "DQ-020: Contagem de clientes Bronze vs Silver"
+    description: "Número de clientes únicos deve ser igual"
+    query: >
+      SELECT
+        (SELECT COUNT(DISTINCT id) FROM `retail_bronze.clientes`) =
+        (SELECT COUNT(DISTINCT cliente_sk) FROM `retail_silver.dim_cliente`) AS count_ok
