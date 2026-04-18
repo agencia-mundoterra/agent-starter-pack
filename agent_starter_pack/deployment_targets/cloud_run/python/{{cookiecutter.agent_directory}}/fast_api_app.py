@@ -563,7 +563,7 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
 
 
 # --- WhatsApp Channel Integration ---
-# Enable by setting TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_WHATSAPP_FROM
+# Ative definindo WHATSAPP_PHONE_NUMBER_ID e WHATSAPP_ACCESS_TOKEN
 {% if cookiecutter.agent_name == "adk_live" %}
 # WhatsApp is not supported for the adk_live agent (real-time audio/video only).
 {% else %}
@@ -577,7 +577,7 @@ from {{cookiecutter.agent_directory}}.channels.whatsapp.webhook import (
 
 _wa_logger = _logging.getLogger("whatsapp_setup")
 
-if os.environ.get("TWILIO_ACCOUNT_SID"):
+if os.environ.get("WHATSAPP_PHONE_NUMBER_ID"):
     _whatsapp_init()
 {%- if cookiecutter.is_adk %}
 {%- if cookiecutter.is_a2a %}
@@ -660,7 +660,7 @@ if os.environ.get("TWILIO_ACCOUNT_SID"):
     _wa_logger.info("WhatsApp channel enabled at /whatsapp/webhook")
 else:
     _wa_logger.info(
-        "WhatsApp channel disabled. Set TWILIO_ACCOUNT_SID to enable."
+        "WhatsApp desabilitado. Defina WHATSAPP_PHONE_NUMBER_ID para ativar."
     )
 {% endif %}
 

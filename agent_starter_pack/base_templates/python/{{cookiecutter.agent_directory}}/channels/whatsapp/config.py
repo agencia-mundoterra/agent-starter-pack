@@ -18,36 +18,41 @@ from pydantic import BaseModel
 
 
 class WhatsAppConfig(BaseModel):
-    """Configuration for WhatsApp integration via Twilio."""
+    """Configuracao para integracao com WhatsApp Cloud API (Meta)."""
 
-    # Twilio credentials
-    account_sid: str = ""
-    auth_token: str = ""
-    # The Twilio WhatsApp-enabled phone number (e.g. "whatsapp:+14155238886")
-    from_number: str = ""
-    # Optional: webhook verification token for security
+    # ID do numero de telefone no Meta for Developers
+    phone_number_id: str = ""
+    # Token de acesso permanente da Meta
+    access_token: str = ""
+    # Token de verificacao do webhook (voce escolhe este valor)
     verify_token: str = ""
+    # Versao da Graph API
+    api_version: str = "v19.0"
 
     @classmethod
     def from_env(cls) -> "WhatsAppConfig":
-        """Load configuration from environment variables.
+        """Carrega configuracao a partir das variaveis de ambiente.
 
-        Expected env vars:
-            TWILIO_ACCOUNT_SID: Twilio account SID
-            TWILIO_AUTH_TOKEN: Twilio auth token
-            TWILIO_WHATSAPP_FROM: WhatsApp sender number (e.g. whatsapp:+14155238886)
-            WHATSAPP_VERIFY_TOKEN: Optional webhook verification token
+        Variaveis esperadas:
+            WHATSAPP_PHONE_NUMBER_ID : Phone Number ID do Meta for Developers
+            WHATSAPP_ACCESS_TOKEN    : Token de acesso permanente
+            WHATSAPP_VERIFY_TOKEN    : Token de verificacao do webhook
         """
         return cls(
-            account_sid=os.environ.get("TWILIO_ACCOUNT_SID", ""),
-            auth_token=os.environ.get("TWILIO_AUTH_TOKEN", ""),
-            from_number=os.environ.get(
-                "TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886"
-            ),
-            verify_token=os.environ.get("WHATSAPP_VERIFY_TOKEN", ""),
+            phone_number_id=os.environ.get("WHATSAPP_PHONE_NUMBER_ID", ""),
+            access_token=os.environ.get("WHATSAPP_ACCESS_TOKEN", ""),
+            verify_token=os.environ.get("WHATSAPP_VERIFY_TOKEN", "meu_token_secreto"),
         )
 
     @property
     def is_configured(self) -> bool:
-        """Check if all required Twilio credentials are set."""
-        return bool(self.account_sid and self.auth_token and self.from_number)
+        """Retorna True se as credenciais obrigatorias estao definidas."""
+        return bool(self.phone_number_id and self.access_token)
+
+    @property
+    def messages_url(self) -> str:
+        """URL da API de envio de mensagens da Meta."""
+        return (
+            f"https://graph.facebook.com/{self.api_version}"
+            f"/{self.phone_number_id}/messages"
+        )

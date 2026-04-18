@@ -1,134 +1,125 @@
-# WhatsApp Channel Integration
+# Canal WhatsApp (Meta WhatsApp Cloud API)
 
-Connect your agent to WhatsApp so users can interact with it from their phones via Twilio.
+Conecta seu agente ao WhatsApp usando a API oficial da Meta — **sem Twilio, sem intermediarios**.
 
-## Architecture
+## Como funciona
 
 ```
-User's Phone (WhatsApp)
+Seu celular (WhatsApp)
     |
     v
-Twilio WhatsApp API
+Meta WhatsApp Cloud API
     |
-    v  (POST /whatsapp/webhook)
+    v  POST /whatsapp/webhook
 FastAPI Server (Cloud Run)
     |
     v
-Agent (ADK / LangGraph)
+Agente (ADK / LangGraph)
     |
-    v  (Twilio REST API)
-Twilio WhatsApp API
+    v  Graph API REST
+Meta WhatsApp Cloud API
     |
     v
-User's Phone (WhatsApp)
+Seu celular (WhatsApp)
 ```
 
-## Setup (Step by Step)
+---
 
-### 1. Install Twilio dependency
+## Configuracao Passo a Passo
+
+### 1. Criar conta no Meta for Developers
+
+1. Acesse [developers.facebook.com](https://developers.facebook.com/)
+2. Clique em **Meus Apps > Criar App**
+3. Escolha o tipo **Business**
+4. Adicione o produto **WhatsApp** ao seu app
+
+### 2. Obter credenciais
+
+No painel do seu app no Meta for Developers:
+
+1. Va em **WhatsApp > Configuracao da API**
+2. Anote:
+   - **Phone Number ID** (ex: `123456789012345`)
+   - **Token de Acesso** — use um token permanente (System User) para producao
+
+> Para criar um token permanente:  
+> Business Settings > System Users > Criar > Gerar Token > selecionar o app
+
+### 3. Configurar variaveis de ambiente
 
 ```bash
-uv pip install twilio
-# or: pip install "{{cookiecutter.project_name}}[whatsapp]"
+# Obrigatorios
+WHATSAPP_PHONE_NUMBER_ID=123456789012345
+WHATSAPP_ACCESS_TOKEN=EAAxxxxxxxxxxxxxxxx
+
+# Voce escolhe este valor (qualquer texto secreto)
+WHATSAPP_VERIFY_TOKEN=meu_token_secreto_123
 ```
 
-### 2. Create a Twilio account
-
-1. Go to [twilio.com](https://www.twilio.com/) and sign up (free trial available)
-2. From the Console Dashboard, note your **Account SID** and **Auth Token**
-
-### 3. Enable WhatsApp Sandbox (for testing)
-
-1. In the Twilio Console, go to **Messaging > Try it out > Send a WhatsApp message**
-2. Follow the instructions to join the sandbox:
-   - Send "join <your-sandbox-keyword>" to the Twilio sandbox number from your phone
-3. Note the sandbox number (e.g., `whatsapp:+14155238886`)
-
-### 4. Set environment variables
-
-Add these to your `.env` file or deployment configuration:
+Para **Cloud Run**, adicione via Secret Manager:
 
 ```bash
-# Required: Twilio credentials
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=your_auth_token_here
-TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
-
-# Optional: webhook verification token
-WHATSAPP_VERIFY_TOKEN=your_custom_verify_token
+gcloud run services update SEU_SERVICE \
+  --set-env-vars="WHATSAPP_PHONE_NUMBER_ID=123456789012345,WHATSAPP_VERIFY_TOKEN=meu_token_secreto_123" \
+  --set-secrets="WHATSAPP_ACCESS_TOKEN=whatsapp-token:latest"
 ```
 
-For **Cloud Run deployment**, add these as secrets via Terraform or `gcloud`:
+### 4. Instalar dependencia
 
 ```bash
-# Using gcloud
-gcloud run services update YOUR_SERVICE \
-  --set-env-vars="TWILIO_WHATSAPP_FROM=whatsapp:+14155238886" \
-  --set-secrets="TWILIO_ACCOUNT_SID=twilio-account-sid:latest,TWILIO_AUTH_TOKEN=twilio-auth-token:latest"
+pip install httpx
+# ou: pip install "seu-projeto[whatsapp]"
 ```
 
-### 5. Configure the Twilio Webhook
+### 5. Registrar o webhook no Meta
 
-Once your server is deployed, configure Twilio to send messages to your webhook:
+Voce precisa de uma URL publica (Cloud Run, ngrok para testes).
 
-1. In the Twilio Console, go to **Messaging > Settings > WhatsApp sandbox settings**
-2. Set the webhook URL:
-   - **When a message comes in**: `https://YOUR-CLOUD-RUN-URL/whatsapp/webhook`
-   - **Method**: POST
-3. Save the configuration
+1. No painel Meta, va em **WhatsApp > Configuracao**
+2. Em **Webhooks**, clique em **Configurar**:
+   - **URL do Callback**: `https://SEU-URL/whatsapp/webhook`
+   - **Token de Verificacao**: o mesmo valor de `WHATSAPP_VERIFY_TOKEN`
+3. Clique em **Verificar e salvar**
+4. Inscreva-se no campo **messages**
 
-### 6. Test it
+### 6. Testar
 
-Send a WhatsApp message to your Twilio sandbox number and you should receive a response from your agent!
+Envie uma mensagem WhatsApp para o numero cadastrado no Meta e aguarde a resposta do agente!
 
-## Local Development
+---
 
-For local testing, use [ngrok](https://ngrok.com/) to expose your local server:
+## Teste local com ngrok
 
 ```bash
-# Start your server
+# Terminal 1: iniciar servidor
 make run
 
-# In another terminal, expose it via ngrok
+# Terminal 2: expor localmente
 ngrok http 8000
 
-# Copy the ngrok URL and set it as your Twilio webhook:
-# https://xxxx-xxxx.ngrok.io/whatsapp/webhook
+# Copie a URL do ngrok (ex: https://xxxx.ngrok.io)
+# Use como webhook: https://xxxx.ngrok.io/whatsapp/webhook
 ```
 
-## Moving to Production
+---
 
-When ready for production:
+## Endpoints
 
-1. **Get a dedicated WhatsApp number**:
-   - Apply for a [Twilio WhatsApp Business Profile](https://www.twilio.com/docs/whatsapp/tutorial/connect-number-business-profile)
-   - Register your business phone number with WhatsApp
+| Endpoint | Metodo | Descricao |
+|----------|--------|-----------|
+| `/whatsapp/webhook` | GET | Verificacao do webhook pela Meta |
+| `/whatsapp/webhook` | POST | Recebe mensagens do WhatsApp |
+| `/whatsapp/health` | GET | Status do canal |
 
-2. **Update environment variables**:
-   - Replace sandbox number with your production number
-   - Store credentials in Google Cloud Secret Manager
+---
 
-3. **Configure Terraform** (optional):
-   Add to `deployment/terraform/variables.tf`:
-   ```hcl
-   variable "twilio_account_sid" {
-     description = "Twilio Account SID for WhatsApp"
-     type        = string
-     sensitive   = true
-   }
-   ```
+## Solucao de problemas
 
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/whatsapp/webhook` | POST | Receives incoming WhatsApp messages from Twilio |
-| `/whatsapp/webhook` | GET | Webhook verification (for Meta Cloud API compatibility) |
-| `/whatsapp/health` | GET | Check WhatsApp channel configuration status |
-
-## Troubleshooting
-
-- **Messages not arriving**: Check that the Twilio webhook URL is correct and accessible
-- **No response sent**: Verify `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` are set correctly
-- **"WhatsApp channel not configured"**: Ensure all three required env vars are set
-- **Long messages truncated**: WhatsApp has a 1600-char limit; messages are automatically split
+| Problema | Solucao |
+|----------|---------|
+| Webhook nao verifica | Confira se `WHATSAPP_VERIFY_TOKEN` bate com o configurado na Meta |
+| Mensagens nao chegam | Assegure que inscreveu no campo `messages` no painel Meta |
+| Erro 401 | `WHATSAPP_ACCESS_TOKEN` invalido ou expirado |
+| Sem resposta | Verifique `WHATSAPP_PHONE_NUMBER_ID` |
+| Canal desabilitado | `WHATSAPP_PHONE_NUMBER_ID` nao esta definido |

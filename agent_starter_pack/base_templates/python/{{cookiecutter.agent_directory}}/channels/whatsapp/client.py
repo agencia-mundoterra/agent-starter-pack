@@ -12,83 +12,97 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Cliente para enviar mensagens via WhatsApp Cloud API (Meta)."""
+
 import logging
 
-from twilio.rest import Client
+import httpx
 
 from .config import WhatsAppConfig
 
 logger = logging.getLogger(__name__)
 
-# WhatsApp has a 1600-character limit per message
-WHATSAPP_MAX_LENGTH = 1600
+# WhatsApp limita mensagens de texto a 4096 caracteres
+WHATSAPP_MAX_LENGTH = 4096
 
 
 class WhatsAppClient:
-    """Client for sending messages via Twilio WhatsApp API."""
+    """Envia mensagens pelo WhatsApp Cloud API da Meta (sem Twilio)."""
 
     def __init__(self, config: WhatsAppConfig) -> None:
         self.config = config
-        self._client = Client(config.account_sid, config.auth_token)
+        self._headers = {
+            "Authorization": f"Bearer {config.access_token}",
+            "Content-Type": "application/json",
+        }
 
-    def send_message(self, to: str, body: str) -> str | None:
-        """Send a WhatsApp message.
+    async def send_message(self, to: str, body: str) -> bool:
+        """Envia uma mensagem de texto para um numero WhatsApp.
 
         Args:
-            to: Recipient phone number in WhatsApp format (e.g. "whatsapp:+5511999999999")
-            body: Message text content
+            to: Numero do destinatario no formato internacional (ex: 5511999999999)
+            body: Texto da mensagem
 
         Returns:
-            Message SID if successful, None on failure
+            True se enviado com sucesso
         """
-        try:
-            # Split long messages to respect WhatsApp limits
-            chunks = self._split_message(body)
-            last_sid = None
+        chunks = self._split_message(body)
+        success = True
+        async with httpx.AsyncClient(timeout=10.0) as client:
             for chunk in chunks:
-                message = self._client.messages.create(
-                    from_=self.config.from_number,
-                    to=to,
-                    body=chunk,
-                )
-                last_sid = message.sid
-                logger.info("WhatsApp message sent: %s -> %s", last_sid, to)
-            return last_sid
-        except Exception:
-            logger.exception("Failed to send WhatsApp message to %s", to)
-            return None
+                payload = {
+                    "messaging_product": "whatsapp",
+                    "recipient_type": "individual",
+                    "to": to,
+                    "type": "text",
+                    "text": {"preview_url": False, "body": chunk},
+                }
+                try:
+                    resp = await client.post(
+                        self.config.messages_url,
+                        headers=self._headers,
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    logger.info("Mensagem WhatsApp enviada para %s", to)
+                except httpx.HTTPStatusError as e:
+                    logger.error(
+                        "Erro ao enviar WhatsApp para %s: %s - %s",
+                        to,
+                        e.response.status_code,
+                        e.response.text,
+                    )
+                    success = False
+                except Exception:
+                    logger.exception("Falha ao enviar WhatsApp para %s", to)
+                    success = False
+        return success
 
-    def send_media(self, to: str, body: str, media_url: str) -> str | None:
-        """Send a WhatsApp message with media attachment.
+    async def mark_as_read(self, message_id: str) -> None:
+        """Marca uma mensagem recebida como lida (double check azul).
 
         Args:
-            to: Recipient phone number in WhatsApp format
-            body: Caption text
-            media_url: Public URL of the media to send
-
-        Returns:
-            Message SID if successful, None on failure
+            message_id: ID da mensagem recebida
         """
-        try:
-            message = self._client.messages.create(
-                from_=self.config.from_number,
-                to=to,
-                body=body,
-                media_url=[media_url],
-            )
-            logger.info("WhatsApp media sent: %s -> %s", message.sid, to)
-            return message.sid
-        except Exception:
-            logger.exception("Failed to send WhatsApp media to %s", to)
-            return None
+        payload = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+        }
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                resp = await client.post(
+                    self.config.messages_url,
+                    headers=self._headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+            except Exception:
+                logger.warning("Nao foi possivel marcar mensagem %s como lida", message_id)
 
     @staticmethod
     def _split_message(text: str) -> list[str]:
-        """Split a long message into chunks that fit WhatsApp's limit.
-
-        Splits on paragraph boundaries when possible, falling back to
-        sentence boundaries, then hard truncation.
-        """
+        """Divide mensagens longas respeitando o limite de 4096 caracteres."""
         if len(text) <= WHATSAPP_MAX_LENGTH:
             return [text]
 
@@ -98,19 +112,15 @@ class WhatsAppClient:
             if len(remaining) <= WHATSAPP_MAX_LENGTH:
                 chunks.append(remaining)
                 break
-
-            # Try to split at paragraph boundary
+            # Tenta quebrar em paragrafo
             cut = remaining[:WHATSAPP_MAX_LENGTH].rfind("\n\n")
             if cut <= 0:
-                # Try sentence boundary
+                # Tenta quebrar em frase
                 cut = remaining[:WHATSAPP_MAX_LENGTH].rfind(". ")
                 if cut <= 0:
-                    # Hard cut at limit
                     cut = WHATSAPP_MAX_LENGTH - 1
                 else:
-                    cut += 1  # Include the period
-
+                    cut += 1
             chunks.append(remaining[:cut].rstrip())
             remaining = remaining[cut:].lstrip()
-
         return chunks
